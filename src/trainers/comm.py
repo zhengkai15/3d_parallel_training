@@ -741,7 +741,7 @@ class Trainer3D:
         if self.rank == 0:
             logger.info("开始训练...")
             from tqdm import tqdm
-            train_loader = tqdm(train_loader, desc=f"Training")
+            train_loader = tqdm(train_loader, total=self.args.max_steps, desc="Training")
         
         while global_step < self.args.max_steps:
             for step, batch in enumerate(train_loader):

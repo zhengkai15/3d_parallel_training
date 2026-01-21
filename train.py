@@ -91,12 +91,51 @@ def create_model(args):
         hidden_dropout=args.hidden_dropout
     )
 
+def create_model_with_pp(args, pp_rank, tp_group):
+    """创建带PP切分的模型（传递TP group）"""
+    model = MegatronLLM(
+        vocab_size=args.vocab_size,
+        hidden_size=args.hidden_size,
+        num_layers=args.num_layers,
+        num_attention_heads=args.num_heads,
+        max_seq_len=args.max_seq_len,
+        ffn_hidden_size=args.ffn_hidden_size,
+        attention_dropout=args.attention_dropout,
+        hidden_dropout=args.hidden_dropout,
+        tp_group=tp_group  # ✅ 传递TP group给模型
+    )
+    
+    if args.pp_size > 1:
+        # 计算每个stage的layers
+        layers_per_stage = args.num_layers // args.pp_size
+        start_layer = pp_rank * layers_per_stage
+        end_layer = (pp_rank + 1) * layers_per_stage if pp_rank < args.pp_size - 1 else args.num_layers
+        
+        logger.info(f"PP rank {pp_rank}: layers {start_layer}~{end_layer}")
+        
+        # 只保留当前stage的layers
+        model.layers = nn.ModuleList(list(model.layers)[start_layer:end_layer])
+        
+        # 第一阶段保留embedding，其他阶段删除
+        if pp_rank != 0:
+            del model.token_embedding
+            del model.position_embedding
+            del model.embedding_dropout
+        
+        # 最后阶段保留输出层，其他阶段删除
+        if pp_rank != args.pp_size - 1:
+            if hasattr(model, 'final_layernorm'):
+                del model.final_layernorm
+            if hasattr(model, 'lm_head'):
+                del model.lm_head
+    
+    return model
 
 # ============================================================================
 # 主函数
 # ============================================================================
 
-def main():
+def parse_args():
     parser = argparse.ArgumentParser()
     
     # 模型参数
@@ -149,7 +188,10 @@ def main():
     parser.add_argument("--zero_stage", type=int, default=2, choices=[0, 1, 2, 3])
     
     args = parser.parse_args()
-    
+    return args
+
+def main():
+    args = parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
     local_rank, rank, world_size = setup_distributed()
     
@@ -189,6 +231,8 @@ def main():
         train_loader = DataLoader(
             train_dataset, batch_size=args.batch_size, sampler=train_sampler
         )
+        
+        model = create_model_with_pp(args, pp_rank, tp_group)
         
         trainer = Trainer3D(
         model, args, local_rank, rank, world_size,

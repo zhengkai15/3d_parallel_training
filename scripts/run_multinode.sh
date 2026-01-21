@@ -38,7 +38,7 @@ MAX_SEQ_LEN=${MAX_SEQ_LEN:-128}
 
 # 训练配置
 BATCH_SIZE=${BATCH_SIZE:-16}
-MAX_STEPS=${MAX_STEPS:-1000}
+MAX_STEPS=${MAX_STEPS:-100}
 LR=${LR:-5e-5}
 WARMUP_STEPS=${WARMUP_STEPS:-2}
 
@@ -75,7 +75,6 @@ echo "Pipeline配置:"
 echo "  Microbatches: $NUM_MICROBATCHES"
 echo "  调度策略: $PIPELINE_SCHEDULE"
 echo ""
-echo "全局Batch size: $((BATCH_SIZE * TOTAL_GPUS))"
 echo "================================"
 
 # ==================== 启动训练 ====================

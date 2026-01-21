@@ -79,7 +79,7 @@ TR=/cpfs01/projects-SSD/cfff-4a8d9af84f66_SSD/public/zhengkai/miniconda3/envs/3d
 $TR --nproc_per_node=$NUM_GPUS \
     --master_addr=127.0.0.1 \
     --master_port=29500 \
-    train_mtrainerge.py \
+    train.py \
     --vocab_size $VOCAB_SIZE \
     --hidden_size $HIDDEN_SIZE \
     --num_layers $NUM_LAYERS \
