@@ -31,14 +31,9 @@
 
 ```
 3d_parallel_training/
-├── train                      # 🎯 统一入口脚本 (推荐)
 ├── train.py                   # 标准训练脚本
-├── train_3d_parallel.py       # 3D并行训练
-├── train_megatron.py          # Megatron训练
 │
-├── model.py                   # 基础模型
 ├── megatron_model.py          # Megatron模型
-├── pipeline_parallel.py       # Pipeline引擎
 │
 ├── scripts/                   # 启动脚本
 │   ├── run_3d_parallel.sh
@@ -55,11 +50,8 @@
 │       ├── zero2.json
 │       └── zero3.json
 │
-├── tools/                     # 工具
+├── src/                     # 工具
 │   ├── monitor.py
-│   ├── test_model.py
-│   ├── benchmark.sh
-│   └── quick_test.sh
 │
 ├── docs/                      # 文档
 │   └── USAGE_GUIDE.md
@@ -82,50 +74,8 @@ pip install -r requirements.txt
 bash tools/quick_test.sh
 ```
 
-### 2. 选择训练模式
 
-#### 方式A: 使用统一入口 (推荐 ⭐)
-
-```bash
-# 简单DDP训练 (入门)
-python train --mode simple --gpus 4
-
-# 3D并行训练 (推荐)
-python train --mode 3d --gpus 8 --tp 2 --pp 2
-
-# Megatron训练 (高性能)
-python train --mode megatron --gpus 8
-
-# DeepSpeed训练 (省内存)
-python train --mode deepspeed --gpus 4 --zero-stage 2
-```
-
-#### 方式B: 使用Shell脚本
-
-```bash
-# 3D并行
-NUM_GPUS=8 TP_SIZE=2 PP_SIZE=2 bash scripts/run_3d_parallel.sh
-
-# Megatron
-NUM_GPUS=8 bash scripts/run_megatron.sh
-
-# DeepSpeed
-ZERO_STAGE=2 bash scripts/run_deepspeed.sh
-```
-
-#### 方式C: 直接调用Python脚本
-
-```bash
-# 3D并行
-torchrun --nproc_per_node=8 train_3d_parallel.py \
-    --tp_size 2 --pp_size 2 --hidden_size 768
-
-# Megatron
-torchrun --nproc_per_node=8 train_megatron.py \
-    --hidden_size 1024 --num_layers 24
-```
-
-### 3. 监控训练
+### 2. 监控训练
 
 ```bash
 # 实时监控
@@ -138,50 +88,9 @@ tail -f output_*/train.log
 watch -n 1 nvidia-smi
 ```
 
-## 📊 性能对比
-
-| 配置 | GPU数 | 加速比 | 适用模型 |
-|-----|-------|--------|---------|
-| DDP | 4 | 3.5x | < 1B |
-| DP+TP | 4 | 3.2x | 1-3B |
-| DP+TP+PP | 8 | 6.5x | 3-10B |
-| 3D并行 | 16 | 12x | 10-30B |
-| 3D+ZeRO3 | 32 | 22x | 30-100B |
-
-```bash
-# 运行性能测试
-NUM_GPUS=8 bash tools/benchmark.sh
 ```
 
-## 💡 使用示例
-
-### 示例1: 小模型快速训练
-
-```bash
-# GPT-2 Small (117M参数)
-python train --mode simple --gpus 4 \
-    --hidden-size 768 --num-layers 12 \
-    --batch-size 8 --max-steps 1000
-```
-
-### 示例2: 中型模型训练
-
-```bash
-# GPT-2 Medium (345M参数)
-python train --mode 3d --gpus 8 --tp 2 --pp 2 \
-    --hidden-size 1024 --num-layers 24 \
-    --batch-size 4 --max-steps 10000
-```
-
-### 示例3: 大模型训练
-
-```bash
-# GPT-3 1.3B
-python train --mode megatron --gpus 16 \
-    --config configs/models/large.yaml
-```
-
-### 示例4: 多节点训练
+###  多节点训练
 
 **节点0 (主节点)**:
 ```bash
@@ -229,75 +138,6 @@ else:
   - 常见问题解答
 
 ## 🛠️ 高级功能
-
-### 混合精度训练
-
-```bash
-python train --mode 3d --gpus 8 --fp16
-```
-
-### 自定义配置文件
-
-```bash
-python train --mode megatron --config my_config.yaml
-```
-
-### 从检查点恢复
-
-```bash
-python train --mode 3d --resume-from output/checkpoint-1000
-```
-
-## 🐛 故障排查
-
-### OOM (内存不足)
-
-```bash
-# 方案1: 减小batch size
-python train --mode 3d --batch-size 2
-
-# 方案2: 使用ZeRO-3
-python train --mode deepspeed --zero-stage 3
-
-# 方案3: 增加并行度
-python train --mode 3d --tp 4 --pp 2
-```
-
-### 训练速度慢
-
-```bash
-# 方案1: 检查GPU利用率
-nvidia-smi dmon
-
-# 方案2: 增大batch size
-python train --batch-size 16
-
-# 方案3: 使用混合精度
-python train --fp16
-```
-
-### 通信超时
-
-```bash
-# 增加超时时间
-export NCCL_TIMEOUT=3600
-
-# 启用调试
-export NCCL_DEBUG=INFO
-```
-
-## 📞 获取帮助
-
-```bash
-# 查看帮助
-python train --help
-
-# 查看详细文档
-cat docs/USAGE_GUIDE.md
-
-# 运行测试
-bash tools/quick_test.sh
-```
 
 ## 🤝 贡献
 
