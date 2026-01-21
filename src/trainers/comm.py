@@ -8,6 +8,7 @@ import time
 import torch
 import torch.nn as nn
 import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 from transformers import get_linear_schedule_with_warmup
 from tqdm import tqdm
 from abc import ABC, abstractmethod
