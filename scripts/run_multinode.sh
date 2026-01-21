@@ -30,7 +30,7 @@ TP_SIZE=${TP_SIZE:-2}
 PP_SIZE=${PP_SIZE:-2}
 
 # 模型配置
-VOCAB_SIZE=${VOCAB_SIZE:-30000}
+VOCAB_SIZE=${VOCAB_SIZE:-5000}
 HIDDEN_SIZE=${HIDDEN_SIZE:-768}
 NUM_LAYERS=${NUM_LAYERS:-12}
 NUM_HEADS=${NUM_HEADS:-12}
@@ -38,7 +38,7 @@ MAX_SEQ_LEN=${MAX_SEQ_LEN:-128}
 
 # 训练配置
 BATCH_SIZE=${BATCH_SIZE:-16}
-MAX_STEPS=${MAX_STEPS:-100}
+MAX_STEPS=${MAX_STEPS:-1000}
 LR=${LR:-5e-5}
 WARMUP_STEPS=${WARMUP_STEPS:-2}
 
@@ -86,7 +86,7 @@ $TR \
     --node_rank=$NODE_RANK \
     --master_addr=$MASTER_ADDR \
     --master_port=$MASTER_PORT \
-    train_3d_parallel.py \
+    train.py \
     --vocab_size $VOCAB_SIZE \
     --hidden_size $HIDDEN_SIZE \
     --num_layers $NUM_LAYERS \
@@ -101,7 +101,8 @@ $TR \
     --num_microbatches $NUM_MICROBATCHES \
     --pipeline_schedule $PIPELINE_SCHEDULE \
     --logging_steps 10 \
-    --output_dir $OUTPUT_DIR
+    --output_dir $OUTPUT_DIR \
+    --trainer 3dtrainer
 
 echo "================================"
 echo "节点 $NODE_RANK 训练完成！"

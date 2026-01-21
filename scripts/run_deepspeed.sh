@@ -22,7 +22,7 @@ TP_SIZE=${TP_SIZE:-2}
 ZERO_STAGE=${ZERO_STAGE:-2}  # ZeRO优化阶段 (0, 1, 2, 3)
 
 # 模型配置
-VOCAB_SIZE=${VOCAB_SIZE:-30000}
+VOCAB_SIZE=${VOCAB_SIZE:-5000}
 HIDDEN_SIZE=${HIDDEN_SIZE:-768}
 NUM_LAYERS=${NUM_LAYERS:-12}
 NUM_HEADS=${NUM_HEADS:-12}
@@ -76,7 +76,6 @@ echo "================================"
 DP=/cpfs01/projects-SSD/cfff-4a8d9af84f66_SSD/public/zhengkai/miniconda3/envs/3dparallel/bin/deepspeed
 $DP --num_gpus=$NUM_GPUS \
     train.py \
-    --use_deepspeed \
     --deepspeed_config $DS_CONFIG \
     --vocab_size $VOCAB_SIZE \
     --hidden_size $HIDDEN_SIZE \
@@ -93,7 +92,8 @@ $DP --num_gpus=$NUM_GPUS \
     --fp16 \
     --logging_steps 10 \
     --save_steps 500 \
-    --output_dir $OUTPUT_DIR
+    --output_dir $OUTPUT_DIR \
+    --trainer deepspeed
 
 echo ""
 echo "================================"

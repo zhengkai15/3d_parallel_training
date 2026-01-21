@@ -3,7 +3,7 @@
 # 单GPU训练脚本 - 用于快速测试
 # 使用方法: bash scripts/run_single_gpu.sh
 
-set -e
+set -x
 
 # 获取脚本所在目录
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -16,16 +16,16 @@ cd "$PROJECT_ROOT"
 
 # 小模型配置 (快速测试)
 VOCAB_SIZE=${VOCAB_SIZE:-5000}
-HIDDEN_SIZE=${HIDDEN_SIZE:-256}
-NUM_LAYERS=${NUM_LAYERS:-4}
-NUM_HEADS=${NUM_HEADS:-4}
-MAX_SEQ_LEN=${MAX_SEQ_LEN:-64}
+HIDDEN_SIZE=${HIDDEN_SIZE:-768}
+NUM_LAYERS=${NUM_LAYERS:-12}
+NUM_HEADS=${NUM_HEADS:-12}
+MAX_SEQ_LEN=${MAX_SEQ_LEN:-128}
 NUM_SAMPLES=${NUM_SAMPLES:-1000}
 
 # 训练配置
 BATCH_SIZE=${BATCH_SIZE:-4}
 GRAD_ACCUM=${GRAD_ACCUM:-2}
-MAX_STEPS=${MAX_STEPS:-100}
+MAX_STEPS=${MAX_STEPS:-1000}
 LR=${LR:-5e-5}
 WARMUP_STEPS=${WARMUP_STEPS:-10}
 
@@ -72,7 +72,8 @@ $PY train.py \
     --logging_steps 5 \
     --save_steps 50 \
     --output_dir $OUTPUT_DIR \
-    --fp16
+    --fp16 \
+    --trainer simple
 
 echo ""
 echo "================================"

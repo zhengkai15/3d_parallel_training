@@ -7,7 +7,7 @@
 # export NCCL_DEBUG=INFO
 # export TORCH_DISTRIBUTED_DEBUG=DETAIL
 
-set -e
+set -x
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
@@ -21,14 +21,14 @@ PP_SIZE=${PP_SIZE:-2}
 NUM_MICROBATCHES=${NUM_MICROBATCHES:-4}
 PIPELINE_SCHEDULE=${PIPELINE_SCHEDULE:-"gpipe"} #gpipe 1f1b
 
-VOCAB_SIZE=${VOCAB_SIZE:-30000}
+VOCAB_SIZE=${VOCAB_SIZE:-5000}
 HIDDEN_SIZE=${HIDDEN_SIZE:-768}
 NUM_LAYERS=${NUM_LAYERS:-12}
 NUM_HEADS=${NUM_HEADS:-12}
 MAX_SEQ_LEN=${MAX_SEQ_LEN:-128}
 
 BATCH_SIZE=${BATCH_SIZE:-8}
-MAX_STEPS=${MAX_STEPS:-100}
+MAX_STEPS=${MAX_STEPS:-1000}
 LR=${LR:-5e-5}
 WARMUP_STEPS=${WARMUP_STEPS:-2}
 
@@ -79,7 +79,7 @@ TR=/cpfs01/projects-SSD/cfff-4a8d9af84f66_SSD/public/zhengkai/miniconda3/envs/3d
 $TR --nproc_per_node=$NUM_GPUS \
     --master_addr=127.0.0.1 \
     --master_port=29500 \
-    train_3d_parallel.py \
+    train_mtrainerge.py \
     --vocab_size $VOCAB_SIZE \
     --hidden_size $HIDDEN_SIZE \
     --num_layers $NUM_LAYERS \
@@ -94,7 +94,8 @@ $TR --nproc_per_node=$NUM_GPUS \
     --num_microbatches $NUM_MICROBATCHES \
     --pipeline_schedule $PIPELINE_SCHEDULE \
     --logging_steps 10 \
-    --output_dir $OUTPUT_DIR
+    --output_dir $OUTPUT_DIR \
+    --trainer 3dtrainer
 
 echo ""
 echo "================================"

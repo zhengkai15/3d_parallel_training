@@ -28,7 +28,7 @@ MASTER_ADDR=${MASTER_ADDR:-"localhost"}
 MASTER_PORT=${MASTER_PORT:-29500}
 
 # 模型配置（如果不使用配置文件）
-VOCAB_SIZE=${VOCAB_SIZE:-30000}
+VOCAB_SIZE=${VOCAB_SIZE:-5000}
 HIDDEN_SIZE=${HIDDEN_SIZE:-768}
 NUM_LAYERS=${NUM_LAYERS:-12}
 NUM_HEADS=${NUM_HEADS:-12}
@@ -124,7 +124,7 @@ else
         --node_rank=$NODE_RANK \
         --master_addr=$MASTER_ADDR \
         --master_port=$MASTER_PORT \
-        train_megatron.py \
+        train.py \
         --vocab_size $VOCAB_SIZE \
         --hidden_size $HIDDEN_SIZE \
         --num_layers $NUM_LAYERS \
@@ -143,7 +143,8 @@ else
         --fp16 \
         --logging_steps $LOGGING_STEPS \
         --save_steps $SAVE_STEPS \
-        --output_dir $OUTPUT_DIR
+        --output_dir $OUTPUT_DIR \
+        --trainer megatron_trainer
 fi
 
 echo ""
