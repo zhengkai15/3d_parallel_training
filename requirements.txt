@@ -1,0 +1,35 @@
+# 3D并行训练依赖包
+
+# PyTorch
+torch>=2.0.0
+torchvision>=0.15.0
+
+# DeepSpeed (支持ZeRO优化、3D并行)
+deepspeed>=0.12.0
+
+# Transformers (用于tokenizer和学习率调度器)
+transformers>=4.36.0
+
+# 分布式训练
+accelerate>=0.25.0
+
+# 数据处理
+numpy>=1.24.0
+datasets>=2.14.0
+
+# 监控和日志
+tensorboard>=2.15.0
+wandb>=0.16.0
+loguru
+# 工具
+tqdm>=4.66.0
+packaging>=23.0
+
+# 可选: NVIDIA Apex (更高效的混合精度训练)
+# apex  # 需要从源码安装
+
+# 可选: FlashAttention (更快的注意力计算)
+# flash-attn>=2.0.0
+
+# 可选: Megatron-LM (NVIDIA的大规模训练框架)
+# 需要从GitHub安装: https://github.com/NVIDIA/Megatron-LM

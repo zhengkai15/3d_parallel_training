@@ -1,0 +1,36 @@
+# 中型模型配置 (类似GPT-2 Medium)
+# 需要更多GPU和内存
+
+model:
+  vocab_size: 50000
+  hidden_size: 1024
+  num_layers: 24
+  num_heads: 16
+  max_seq_len: 1024
+  ffn_hidden_size: 4096  # 4 * hidden_size
+  attention_dropout: 0.1
+  hidden_dropout: 0.1
+
+training:
+  num_samples: 500000
+  batch_size: 4
+  gradient_accumulation_steps: 8
+  max_steps: 50000
+  learning_rate: 3e-4
+  min_lr: 3e-5
+  weight_decay: 0.1
+  warmup_steps: 2000
+  max_grad_norm: 1.0
+  fp16: true
+
+parallel:
+  tp_size: 2
+  pp_size: 2
+  # 建议使用8+ GPUs
+  # dp_size = world_size / (2 * 2) = world_size / 4
+
+logging:
+  logging_steps: 10
+  save_steps: 2000
+  eval_steps: 1000
+  output_dir: "./output_medium"

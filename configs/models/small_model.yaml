@@ -1,0 +1,35 @@
+# 小型模型配置 (类似GPT-2 Small)
+# 适合快速测试和验证
+
+model:
+  vocab_size: 30000
+  hidden_size: 768
+  num_layers: 12
+  num_heads: 12
+  max_seq_len: 1024
+  ffn_hidden_size: 3072  # 4 * hidden_size
+  attention_dropout: 0.1
+  hidden_dropout: 0.1
+
+training:
+  num_samples: 100000
+  batch_size: 8
+  gradient_accumulation_steps: 4
+  max_steps: 10000
+  learning_rate: 6e-4
+  min_lr: 6e-5
+  weight_decay: 0.1
+  warmup_steps: 500
+  max_grad_norm: 1.0
+  fp16: true
+
+parallel:
+  tp_size: 1
+  pp_size: 1
+  # dp_size will be calculated as: world_size / (tp_size * pp_size)
+
+logging:
+  logging_steps: 10
+  save_steps: 1000
+  eval_steps: 500
+  output_dir: "./output_small"
