@@ -1,13 +1,11 @@
 {
   "train_micro_batch_size_per_gpu": 2,
   "gradient_accumulation_steps": 1,
-        
   "steps_per_print": 10,
   "wall_clock_breakdown": false,
   "seed": 42,
-        
   "zero_optimization": {
-    "stage": 2,
+    "stage": 1,
     "contiguous_gradients": true,
     "overlap_comm": true,
     "reduce_scatter": true,
@@ -17,9 +15,7 @@
       "device": "cpu",
       "pin_memory": true
     }
-
   },
-        
   "optimizer": {
     "type": "AdamW",
     "params": {
@@ -32,14 +28,12 @@
       "weight_decay": 0.01
     }
   },
-        
   "fp16": {
     "enabled": false,
     "loss_scale": 0,
     "loss_scale_window": 1000,
     "initial_scale_power": 16
   },
-        
   "gradient_clipping": 1.0,
   "communication_data_type": "fp32"
 }

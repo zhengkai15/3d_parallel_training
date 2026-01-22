@@ -9,6 +9,93 @@ from typing import Optional
 import math
 
 
+
+
+class SimpleTransformer(nn.Module):
+    """简化的 Transformer 模型，用于单卡测试"""
+    
+    def __init__(
+        self,
+        vocab_size=10000,
+        hidden_size=512,
+        num_heads=8,
+        num_layers=8,
+        ffn_hidden_size=2048,
+        max_seq_len=128
+    ):
+        super().__init__()
+        self.embedding = nn.Embedding(vocab_size, hidden_size)
+        self.positional_encoding = self._get_positional_encoding(max_seq_len, hidden_size)
+        
+        self.layers = nn.ModuleList([
+            nn.TransformerDecoderLayer(
+                d_model=hidden_size,
+                nhead=num_heads,
+                dim_feedforward=ffn_hidden_size,
+                batch_first=True
+            )
+            for _ in range(num_layers)
+        ])
+        self.norm = nn.LayerNorm(hidden_size)
+        self.lm_head = nn.Linear(hidden_size, vocab_size, bias=False)
+
+    def _get_positional_encoding(self, seq_len, hidden_size):
+        """生成位置编码"""
+        pe = torch.zeros(seq_len, hidden_size)
+        position = torch.arange(0, seq_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(
+            torch.arange(0, hidden_size, 2).float() * 
+            -(torch.log(torch.tensor(10000.0)) / hidden_size)
+        )
+        pe[:, 0::2] = torch.sin(position * div_term)
+        if hidden_size % 2 == 1:
+            pe[:, 1::2] = torch.cos(position * div_term[:-1])
+        else:
+            pe[:, 1::2] = torch.cos(position * div_term)
+        return pe.unsqueeze(0)  # (1, seq_len, hidden_size)
+
+    def forward(self, input_ids=None, attention_mask=None, labels=None):
+        """
+        Args:
+            input_ids: (batch_size, seq_len)
+            attention_mask: 不使用（为了兼容 API）
+            labels: (batch_size, seq_len)
+        Returns:
+            loss 或 logits
+        """
+        batch_size, seq_len = input_ids.shape
+        
+        # 嵌入层
+        x = self.embedding(input_ids)  # (batch_size, seq_len, hidden_size)
+        
+        # 添加位置编码
+        pe = self.positional_encoding[:, :seq_len, :].to(x.device)
+        x = x + pe
+        
+        # Transformer 解码层（不使用 mask，简化版本）
+        for layer in self.layers:
+            # 注意：TransformerDecoderLayer 需要 memory 参数
+            # 这里我们使用自注意力，所以 memory = x
+            x = layer(x, memory=x)
+        
+        # 层归一化
+        x = self.norm(x)
+        
+        # 语言模型头（预测下一个 token）
+        logits = self.lm_head(x)  # (batch_size, seq_len, vocab_size)
+        
+        # 计算损失
+        if labels is not None:
+            # Flatten 以计算交叉熵
+            loss = F.cross_entropy(
+                logits.reshape(-1, logits.shape[-1]),  # (batch_size * seq_len, vocab_size)
+                labels.reshape(-1)  # (batch_size * seq_len,)
+            )
+            return {"loss":loss}
+        
+        return logits
+
+
 # ============= TP通信原语 =============
 
 def copy_to_tensor_model_parallel_region(input_: torch.Tensor, tp_group=None):

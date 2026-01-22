@@ -96,7 +96,7 @@ TR=/cpfs01/projects-SSD/cfff-4a8d9af84f66_SSD/public/zhengkai/miniconda3/envs/3d
 # 单节点训练
 if [ $NUM_NODES -eq 1 ]; then
     $TR --nproc_per_node=$NUM_GPUS \
-        train_megatron.py \
+        train.py \
         --vocab_size $VOCAB_SIZE \
         --hidden_size $HIDDEN_SIZE \
         --num_layers $NUM_LAYERS \
@@ -115,7 +115,8 @@ if [ $NUM_NODES -eq 1 ]; then
         --fp16 \
         --logging_steps $LOGGING_STEPS \
         --save_steps $SAVE_STEPS \
-        --output_dir $OUTPUT_DIR
+        --output_dir $OUTPUT_DIR \
+        --trainer megatron_trainer
 else
     # 多节点训练
     $TR \

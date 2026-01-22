@@ -131,6 +131,104 @@ def create_model_with_pp(args, pp_rank, tp_group):
     
     return model
 
+def create_3d_process_groups(rank, world_size, tp_size, pp_size):
+    """
+    创建 3D 并行的进程组
+    
+    Args:
+        rank: 全局 rank
+        world_size: 总进程数
+        tp_size: Tensor Parallel 大小
+        pp_size: Pipeline Parallel 大小
+    
+    Returns:
+        tp_group, pp_group, dp_group, tp_rank, pp_rank, dp_rank
+    """
+    
+    if world_size % (tp_size * pp_size) != 0:
+        raise ValueError(
+            f"world_size ({world_size}) 必须能被 tp_size*pp_size ({tp_size*pp_size}) 整除"
+        )
+    
+    dp_size = world_size // (tp_size * pp_size)
+    
+    # 计算当前进程的 3D 坐标
+    # rank = dp_rank * (tp_size * pp_size) + pp_rank * tp_size + tp_rank
+    tp_rank = rank % tp_size
+    pp_rank = (rank // tp_size) % pp_size
+    dp_rank = rank // (tp_size * pp_size)
+    
+    print(f"[Rank {rank}] 3D 坐标: DP={dp_rank}, PP={pp_rank}, TP={tp_rank}")
+    print(f"[Rank {rank}] 并行规模: DP={dp_size}, PP={pp_size}, TP={tp_size}")
+    
+    # ======================== 创建 Tensor Parallel 组 ========================
+    # 同一 DP 和 PP 坐标的进程共享 TP 组
+    tp_group = None
+    if tp_size > 1:
+        tp_ranks = []
+        for i in range(tp_size):
+            global_rank = dp_rank * (tp_size * pp_size) + pp_rank * tp_size + i
+            tp_ranks.append(global_rank)
+        
+        tp_group = dist.new_group(ranks=tp_ranks)
+        print(f"[Rank {rank}] ✓ 创建 TP 组: {tp_ranks}")
+    
+    # ======================== 创建 Pipeline Parallel 组 ========================
+    # 同一 DP 和 TP 坐标的进程共享 PP 组
+    pp_group = None
+    if pp_size > 1:
+        pp_ranks = []
+        for i in range(pp_size):
+            global_rank = dp_rank * (tp_size * pp_size) + i * tp_size + tp_rank
+            pp_ranks.append(global_rank)
+        
+        pp_group = dist.new_group(ranks=pp_ranks)
+        print(f"[Rank {rank}] ✓ 创建 PP 组: {pp_ranks}")
+    
+    # ======================== 创建 Data Parallel 组 ========================
+    # 同一 TP 和 PP 坐标的进程共享 DP 组
+    dp_group = None
+    if dp_size > 1:
+        dp_ranks = []
+        for i in range(dp_size):
+            global_rank = i * (tp_size * pp_size) + pp_rank * tp_size + tp_rank
+            dp_ranks.append(global_rank)
+        
+        dp_group = dist.new_group(ranks=dp_ranks)
+        print(f"[Rank {rank}] ✓ 创建 DP 组: {dp_ranks}")
+    
+    return tp_group, pp_group, dp_group, tp_rank, pp_rank, dp_rank
+
+def init_distributed_and_groups(rank, world_size, tp_size, pp_size):
+    """初始化分布式和进程组的完整流程"""
+    
+    # Step 1: 初始化 torch.distributed
+    print(f"[Rank {rank}] 初始化 torch.distributed...")
+    if not dist.is_initialized():
+        dist.init_process_group(
+            backend='nccl',
+            rank=rank,
+            world_size=world_size,
+            timeout=torch.distributed.timedelta(minutes=30)
+        )
+        print(f"[Rank {rank}] ✓ torch.distributed 初始化成功")
+    
+    # Step 2: 同步所有进程（确保都初始化完毕）
+    dist.barrier()
+    
+    # Step 3: 创建 3D 并行进程组
+    print(f"\n[Rank {rank}] 创建 3D 并行进程组...")
+    tp_group, pp_group, dp_group, tp_rank, pp_rank, dp_rank = create_3d_process_groups(
+        rank, world_size, tp_size, pp_size
+    )
+    
+    # Step 4: 再次同步
+    dist.barrier()
+    
+    print(f"[Rank {rank}] ✓ 所有进程组创建完成")
+    
+    return tp_group, pp_group, dp_group, tp_rank, pp_rank, dp_rank
+
 # ============================================================================
 # 主函数
 # ============================================================================
@@ -153,7 +251,7 @@ def parse_args():
     parser.add_argument("--batch_size", type=int, default=8)
     
     # 训练参数
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=4)
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
     parser.add_argument("--max_steps", type=int, default=10000)
     parser.add_argument("--learning_rate", type=float, default=6e-4)
     parser.add_argument("--min_lr", type=float, default=6e-5)
@@ -189,6 +287,7 @@ def parse_args():
     
     args = parser.parse_args()
     return args
+
 
 def main():
     args = parse_args()
@@ -235,13 +334,33 @@ def main():
         model = create_model_with_pp(args, pp_rank, tp_group)
         
         trainer = Trainer3D(
-        model, args, local_rank, rank, world_size,
-        tp_group, pp_group, dp_group,
-        tp_rank, pp_rank, dp_rank
+            model, args, local_rank, rank, world_size,
+            tp_group, pp_group, dp_group,
+            tp_rank, pp_rank, dp_rank
+            )
+        
+    elif args.trainer == "deepspeed_3dtrainer":
+        tp_group, pp_group, dp_group, tp_rank, pp_rank, dp_rank = init_distributed_and_groups(
+        rank, world_size, args.tp_size, args.pp_size
         )
+        train_loader = DataLoader(
+            train_dataset, batch_size=args.batch_size, num_workers=2, pin_memory=True
+        )
+
+        trainer = DeepSpeed_Trainer3D(
+            model, args, local_rank, rank, world_size,
+            tp_group, pp_group, dp_group,
+            tp_rank, pp_rank, dp_rank
+            )
         
     elif args.trainer == "megatron_trainer":  
-        MegatronTrainer(
+        train_sampler = DistributedSampler(
+            train_dataset, num_replicas=world_size, rank=rank, shuffle=True
+        )
+        train_loader = DataLoader(
+            train_dataset, batch_size=args.batch_size, sampler=train_sampler
+        )
+        trainer = MegatronTrainer(
             model=model,
             args=args,
             local_rank=local_rank,
@@ -249,7 +368,7 @@ def main():
             world_size=world_size
         )
     
-    elif args.trainer == "deepspeed":
+    elif args.trainer == "deepspeed_trainner":
         train_loader = DataLoader(
             train_dataset, batch_size=args.batch_size, num_workers=2, pin_memory=True
         )

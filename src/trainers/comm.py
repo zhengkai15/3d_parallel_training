@@ -221,115 +221,25 @@ class SimpleTrainer(BaseTrainer):
         logger.info(f"Checkpoint saved to {save_dir}")
 
 
+def get_learning_rate_scheduler(optimizer, args):
+    """
+    Megatron学习率调度策略
+    - Warmup阶段: 线性增长到max_lr
+    - Decay阶段: 余弦衰减到min_lr
+    """
+    def lr_lambda(current_step):
+        if current_step < args.warmup_steps:
+            # Warmup: 从0线性增长到1
+            return float(current_step) / float(max(1, args.warmup_steps))
+        else:
+            # Cosine decay
+            progress = float(current_step - args.warmup_steps) / \
+                      float(max(1, args.max_steps - args.warmup_steps))
+            return max(args.min_lr / args.learning_rate,
+                      0.5 * (1.0 + np.cos(np.pi * progress)))
 
-class DeepSpeedTrainer(BaseTrainer):
-    """DeepSpeed训练器 (支持ZeRO优化)"""
-    
-    def __init__(self, model, args, local_rank, rank, world_size):
-        super().__init__(model, args, local_rank, rank, world_size)
-        
-        self.local_rank = local_rank
-        deepspeed.init_distributed()
-        
-        ds_config = self._get_ds_config()
-        self.model_engine, self.optimizer, _, self.scheduler = deepspeed.initialize(
-            model=model,
-            model_parameters=model.parameters(),
-            config=ds_config
-        )
-        
-        if rank == 0:
-            logger.info(f"DeepSpeedTrainer initialized (ZeRO stage={args.zero_stage})")
-    
-    def _get_ds_config(self) -> Dict[str, Any]:
-        """获取DeepSpeed配置"""
-        if self.args.deepspeed_config and os.path.exists(self.args.deepspeed_config):
-            with open(self.args.deepspeed_config) as f:
-                return json.load(f)
-        
-        return {
-            "train_batch_size": self.args.batch_size * self.world_size * self.args.gradient_accumulation_steps,
-            "train_micro_batch_size_per_gpu": self.args.batch_size,
-            "gradient_accumulation_steps": self.args.gradient_accumulation_steps,
-            "steps_per_print": self.args.logging_steps,
-            "optimizer": {
-                "type": "AdamW",
-                "params": {
-                    "lr": self.args.learning_rate,
-                    "betas": [0.9, 0.999],
-                    "eps": 1e-8,
-                    "weight_decay": self.args.weight_decay
-                }
-            },
-            "scheduler": {
-                "type": "WarmupDecayLR",
-                "params": {
-                    "warmup_min_lr": 0,
-                    "warmup_max_lr": self.args.learning_rate,
-                    "warmup_num_steps": self.args.warmup_steps,
-                    "total_num_steps": self.args.max_steps
-                }
-            },
-            "fp16": {"enabled": self.args.fp16},
-            "zero_optimization": {"stage": self.args.zero_stage}
-        }
-    
-    def train_step(self, batch) -> torch.Tensor:
-        """单步训练"""
-        input_ids = batch['input_ids'].to(self.model_engine.device)
-        attention_mask = batch['attention_mask'].to(self.model_engine.device)
-        labels = batch['labels'].to(self.model_engine.device)
-        if self.args.fp16:
-            attention_mask = attention_mask.half()
-        outputs = self.model_engine(input_ids, attention_mask, labels=labels)
-        return outputs['loss']
-    
-    def train(self, train_loader):
-        """训练主循环"""
-        self.model_engine.train()
-        
-        if self.rank == 0:
-            logger.info("Starting training with DeepSpeedTrainer...")
-        
-        self.global_step = 0
-        running_loss = 0.0
-        
-        while self.global_step < self.args.max_steps:
-            for step, batch in enumerate(train_loader):
-                step_start = time.time()
-                
-                loss = self.train_step(batch)
-                self.model_engine.backward(loss)
-                self.model_engine.step()
-                
-                self.global_step += 1
-                running_loss += loss.item()
-                step_time = time.time() - step_start
-                
-                if self.global_step % self.args.logging_steps == 0 and self.rank == 0:
-                    avg_loss = running_loss / self.args.logging_steps
-                    self._log_training_stats(avg_loss, 0, step_time)
-                    running_loss = 0.0
-                
-                if self.global_step % self.args.save_steps == 0:
-                    self._save_checkpoint()
-                
-                if self.global_step >= self.args.max_steps:
-                    break
-            
-            if self.global_step >= self.args.max_steps:
-                break
-        
-        if self.rank == 0:
-            logger.info("Training completed!")
-    
-    def _save_checkpoint(self, is_final=False):
-        """保存检查点"""
-        tag = "final_model" if is_final else f"checkpoint-{self.global_step}"
-        self.model_engine.save_checkpoint(self.args.output_dir, tag=tag)
-        if self.rank == 0:
-            logger.info(f"Checkpoint saved with tag: {tag}")
-
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+    return scheduler
 
 
 class MegatronTrainer:
@@ -337,11 +247,13 @@ class MegatronTrainer:
 
     def __init__(self, model, args, local_rank, rank, world_size):
         self.model = model
+        
         self.args = args
         self.local_rank = local_rank
         self.rank = rank
         self.world_size = world_size
         self.device = torch.device(f'cuda:{local_rank}')
+        self.model = self.model.to(self.device)
 
         # 优化器
         self.optimizer = self._create_optimizer()
@@ -808,3 +720,117 @@ class Trainer3D:
         
         if self.rank == 0:
             logger.info("训练完成！")
+    
+
+class DeepSpeedTrainer(BaseTrainer):
+    """DeepSpeed训练器 (支持ZeRO优化)"""
+    
+    def __init__(self, model, args, local_rank, rank, world_size):
+        super().__init__(model, args, local_rank, rank, world_size)
+        logger.info(f"DeepSpeedTrainer init...")
+        
+        self.rank = rank
+        self.local_rank = local_rank
+        
+        ds_config = self._get_ds_config()
+
+        self.model_engine, self.optimizer, _, self.scheduler = deepspeed.initialize(
+            model=model,
+            model_parameters=model.parameters(),
+            config=ds_config,
+            dist_init_required=False,  # 必须False，否则重复初始化
+            
+        )
+        
+        if rank == 0:
+            logger.info(f"DeepSpeedTrainer initialized (ZeRO stage={args.zero_stage})")
+    
+    def _get_ds_config(self) -> Dict[str, Any]:
+        """获取DeepSpeed配置"""
+        if self.args.deepspeed_config and os.path.exists(self.args.deepspeed_config):
+            with open(self.args.deepspeed_config) as f:
+                return json.load(f)
+        
+        return {
+            "train_batch_size": self.args.batch_size * self.world_size * self.args.gradient_accumulation_steps,
+            "train_micro_batch_size_per_gpu": self.args.batch_size,
+            "gradient_accumulation_steps": self.args.gradient_accumulation_steps,
+            "steps_per_print": self.args.logging_steps,
+            "optimizer": {
+                "type": "AdamW",
+                "params": {
+                    "lr": self.args.learning_rate,
+                    "betas": [0.9, 0.999],
+                    "eps": 1e-8,
+                    "weight_decay": self.args.weight_decay
+                }
+            },
+            "scheduler": {
+                "type": "WarmupDecayLR",
+                "params": {
+                    "warmup_min_lr": 0,
+                    "warmup_max_lr": self.args.learning_rate,
+                    "warmup_num_steps": self.args.warmup_steps,
+                    "total_num_steps": self.args.max_steps
+                }
+            },
+            "fp16": {"enabled": self.args.fp16},
+            "zero_optimization": {"stage": self.args.zero_stage}
+        }
+    
+    def train_step(self, batch) -> torch.Tensor:
+        """单步训练"""
+        input_ids = batch['input_ids'].to(self.model_engine.device)
+        attention_mask = batch['attention_mask'].to(self.model_engine.device)
+        labels = batch['labels'].to(self.model_engine.device)
+        if self.args.fp16:
+            attention_mask = attention_mask.half()
+        outputs = self.model_engine(input_ids, attention_mask, labels=labels)
+        return outputs['loss']
+    
+    def train(self, train_loader):
+        """训练主循环"""
+        self.model_engine.train()
+        
+        if self.rank == 0:
+            logger.info("Starting training with DeepSpeedTrainer...")
+        
+        self.global_step = 0
+        running_loss = 0.0
+        
+        while self.global_step < self.args.max_steps:
+            for step, batch in enumerate(train_loader):
+                step_start = time.time()
+                
+                loss = self.train_step(batch)
+                self.model_engine.backward(loss)
+                self.model_engine.step()
+                
+                self.global_step += 1
+                running_loss += loss.item()
+                step_time = time.time() - step_start
+                
+                if self.global_step % self.args.logging_steps == 0 and self.rank == 0:
+                    avg_loss = running_loss / self.args.logging_steps
+                    self._log_training_stats(avg_loss, 0, step_time)
+                    running_loss = 0.0
+                
+                if self.global_step % self.args.save_steps == 0:
+                    self._save_checkpoint()
+                
+                if self.global_step >= self.args.max_steps:
+                    break
+            
+            if self.global_step >= self.args.max_steps:
+                break
+        
+        if self.rank == 0:
+            logger.info("Training completed!")
+    
+    def _save_checkpoint(self, is_final=False):
+        """保存检查点"""
+        tag = "final_model" if is_final else f"checkpoint-{self.global_step}"
+        self.model_engine.save_checkpoint(self.args.output_dir, tag=tag)
+        if self.rank == 0:
+            logger.info(f"Checkpoint saved with tag: {tag}")
+            

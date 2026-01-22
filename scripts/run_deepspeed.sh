@@ -41,8 +41,12 @@ OUTPUT_DIR=${OUTPUT_DIR:-"./aexp/output_deepspeed_zero${ZERO_STAGE}"}
 # DeepSpeed配置文件
 if [ $ZERO_STAGE -eq 3 ]; then
     DS_CONFIG="configs/deepspeed/ds_config_zero3.json"
-else
+elif [ $ZERO_STAGE -eq 2 ]; then
     DS_CONFIG="configs/deepspeed/ds_config_zero2.json"
+elif [ $ZERO_STAGE -eq 1 ]; then
+    DS_CONFIG="configs/deepspeed/ds_config_zero1.json"
+else
+    DS_CONFIG="configs/deepspeed/ds_config_zero0.json"
 fi
 
 # 检查配置文件是否存在
@@ -73,8 +77,36 @@ echo "输出目录: $OUTPUT_DIR"
 echo "================================"
 
 # ==================== 启动训练 ====================
+# 优先使用deepspeed_config中的配置 
 DP=/cpfs01/projects-SSD/cfff-4a8d9af84f66_SSD/public/zhengkai/miniconda3/envs/3dparallel/bin/deepspeed
-$DP --num_gpus=$NUM_GPUS \
+# $DP --num_gpus=$NUM_GPUS \
+#     train.py \
+#     --deepspeed_config $DS_CONFIG \
+#     --vocab_size $VOCAB_SIZE \
+#     --hidden_size $HIDDEN_SIZE \
+#     --num_layers $NUM_LAYERS \
+#     --num_heads $NUM_HEADS \
+#     --max_seq_len $MAX_SEQ_LEN \
+#     --batch_size $BATCH_SIZE \
+#     --gradient_accumulation_steps $GRAD_ACCUM_STEPS \
+#     --max_steps $MAX_STEPS \
+#     --learning_rate $LEARNING_RATE \
+#     --warmup_steps $WARMUP_STEPS \
+#     --tp_size $TP_SIZE \
+#     --zero_stage $ZERO_STAGE \
+#     --fp16 \
+#     --logging_steps 10 \
+#     --save_steps 500 \
+#     --output_dir $OUTPUT_DIR \
+#     --trainer deepspeed_trainner
+
+TR=/cpfs01/projects-SSD/cfff-4a8d9af84f66_SSD/public/zhengkai/miniconda3/envs/3dparallel/bin/torchrun
+# TODO: deepspeed_3dtrainer 实现zero优化器分片+3d并行
+$TR --master_addr=dlc1443fgp02dkod-master-0 \
+    --master_port=56747 \
+    --nnodes 1 \
+    --nproc_per_node 4 \
+    --node_rank $1 \
     train.py \
     --deepspeed_config $DS_CONFIG \
     --vocab_size $VOCAB_SIZE \
@@ -93,7 +125,7 @@ $DP --num_gpus=$NUM_GPUS \
     --logging_steps 10 \
     --save_steps 500 \
     --output_dir $OUTPUT_DIR \
-    --trainer deepspeed
+    --trainer deepspeed_trainner # deepspeed_3dtrainer  deepspeed_trainner
 
 echo ""
 echo "================================"
