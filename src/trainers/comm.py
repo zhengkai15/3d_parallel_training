@@ -14,7 +14,7 @@ from tqdm import tqdm
 from abc import ABC, abstractmethod
 from loguru import logger
 import numpy as np
-from typing import Optional, Dict, Any
+from typing import Dict, Any, Optional, Tuple
 import deepspeed
 
 from src.parallel.pipeline_parallel import InterleaveEngine, PipelineEngine, GPipeEngine
@@ -82,10 +82,6 @@ class BaseTrainer(ABC):
         self.log_file.write(log_str + '\n')
         self.log_file.flush()
 
-
-# ============================================================================
-# 具体Trainer实现
-# ============================================================================
 
 class SimpleTrainer(BaseTrainer):
     """标准DDP训练器"""
@@ -834,3 +830,181 @@ class DeepSpeedTrainer(BaseTrainer):
         if self.rank == 0:
             logger.info(f"Checkpoint saved with tag: {tag}")
             
+
+class PipelineIterator:
+    """
+    数据适配器：将常规 DataLoader 转换为 DeepSpeed Pipeline 引擎要求的格式。
+    
+    Pipeline 引擎要求每次 yield 的数据格式为：
+    ((input_ids, attention_mask), labels) 
+    或者
+    (input_ids, labels) -> 如果没有 mask
+    """
+    def __init__(self, dataloader, device):
+        self.dataloader = dataloader
+        self.iterator = iter(dataloader)
+        self.device = device
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        try:
+            batch = next(self.iterator)
+        except StopIteration:
+            # 如果一轮跑完，重新开始迭代
+            self.iterator = iter(self.dataloader)
+            batch = next(self.iterator)
+
+        # 1. 搬运数据到 GPU
+        # 假设 batch 是字典格式 {'input_ids': ..., 'labels': ..., 'attention_mask': ...}
+        input_ids = batch['input_ids'].to(self.device)
+        labels = batch['labels'].to(self.device)
+        
+        # 2. 组装成 Tuple 结构
+        # 结构必须匹配你在 Pipeline 第一层 (EmbeddingPipe) 的 forward 参数签名
+        if 'attention_mask' in batch and batch['attention_mask'] is not None:
+            attention_mask = batch['attention_mask'].to(self.device)
+            # 返回格式: ((输入参数1, 输入参数2), 标签)
+            return (input_ids, attention_mask), labels
+        else:
+            # 返回格式: (输入参数1, 标签)
+            return input_ids, labels
+
+
+class DeepSpeedPipelineTrainer3D:
+    """
+    专用于 DeepSpeed Pipeline Parallelism 的训练器
+    """
+    def __init__(self, model, args, local_rank, rank, world_size):
+        """
+        Args:
+            model: 必须是 deepspeed.pipe.PipelineModule 的实例
+            args: 包含 deepspeed_config, output_dir, max_steps 等参数的对象
+            local_rank: 本地 GPU ID
+            rank: 全局进程 ID
+        """
+        self.args = args
+        self.local_rank = local_rank
+        self.rank = rank
+        self.world_size = world_size
+        self.device = torch.device(f'cuda:{local_rank}')
+        
+        # model 此时应该已经是一个 PipelineModule
+        self.model = model
+
+        logger.info(f"[Rank {self.rank}] Initializing DeepSpeed Pipeline Engine...")
+        
+        # ==================== 初始化 DeepSpeed ====================
+        ds_config = self._get_ds_config()
+        
+        print(ds_config)
+        
+        # initialize 会返回 engine, optimizer 等
+        # 注意：在 Pipeline 模式下，model 参数必须是 PipelineModule
+        self.model_engine, self.optimizer, _, self.scheduler = deepspeed.initialize(
+            model=self.model,
+            model_parameters=[p for p in self.model.parameters()], # 有时 PipelineModule 需要显式传参
+            config=ds_config,
+            dist_init_required=False
+        )
+        
+        if self.rank == 0:
+            logger.info("DeepSpeed Pipeline Engine Initialized Successfully.")
+            logger.info(f"Pipeline Config: Micro-batches={self.model_engine.micro_batches}, "
+                        f"Grad Accumulation={self.model_engine.gradient_accumulation_steps()}")
+            
+        self.global_step = 0
+
+    def _get_ds_config(self) -> Dict[str, Any]:
+        """加载 DeepSpeed 配置文件"""
+        if hasattr(self.args, 'deepspeed_config') and self.args.deepspeed_config and os.path.exists(self.args.deepspeed_config):
+            with open(self.args.deepspeed_config) as f:
+                return json.load(f)
+        # 如果没有文件，尝试从 args 直接读取 (根据你的 args 结构调整)
+        return {} 
+
+    def train(self, train_dataloader):
+        """
+        Pipeline 并行模式下的训练循环
+        
+        与普通训练循环的区别：
+        1. 不再手动调用 zero_grad, backward, step
+        2. 使用 train_batch() 驱动引擎
+        """
+        self.model_engine.train()
+        self.global_step = 0
+        
+        # 初始化数据迭代器
+        data_iterator = PipelineIterator(train_dataloader, self.device)
+        
+        running_loss = 0.0
+        start_time = time.time()
+        
+        if self.rank == 0:
+            logger.info("Starting Pipeline Training Loop...")
+        
+        while self.global_step < self.args.max_steps:
+            
+            # ============================================================
+            # 核心：Pipeline 引擎接管训练步骤
+            # ============================================================
+            # train_batch 会执行以下操作：
+            # 1. 按照 gradient_accumulation_steps 获取 N 个 micro-batches
+            # 2. 执行 forward (Pipeline schedule)
+            # 3. 执行 loss 计算 (使用你传入 PipelineModule 的 loss_fn)
+            # 4. 执行 backward (Pipeline schedule)
+            # 5. 执行 optimizer step (如果 accumulator 满了)
+            loss = self.model_engine.train_batch(data_iter=data_iterator)
+            
+            # DeepSpeed 返回的 loss 是当前 step 所有 micro-batches 的平均值
+            # 注意：在 Pipeline 中，有些 rank 可能不参与 loss 计算，返回 None
+            if loss is not None:
+                loss_val = loss.item() if isinstance(loss, torch.Tensor) else loss
+                running_loss += loss_val
+            
+            self.global_step += 1
+            
+            # ==================== 日志记录 ====================
+            if self.global_step % self.args.logging_steps == 0:
+                # 只有 Rank 0 或 Pipeline 的最后一个 Stage 才有完整的 loss 视图
+                # 简单的做法是只让 rank 0 打印 (如果 rank 0 也能拿到 loss)
+                # 在 DeepSpeed 中，通常 train_batch 会在所有进程返回 loss (广播后)
+                elapsed = time.time() - start_time
+                avg_loss = running_loss / self.args.logging_steps
+                throughput = (self.args.logging_steps * self.model_engine.train_micro_batch_size_per_gpu() * self.model_engine.gradient_accumulation_steps()) / elapsed
+                
+                logger.info(
+                    f"Step {self.global_step}/{self.args.max_steps} | "
+                    f"Loss: {avg_loss:.4f} | "
+                    f"Time/Step: {elapsed/self.args.logging_steps:.3f}s | "
+                    f"Samples/s: {throughput:.2f}"
+                )
+                running_loss = 0.0
+                start_time = time.time()
+
+            # ==================== Checkpoint 保存 ====================
+            if self.global_step % self.args.save_steps == 0:
+                self._save_checkpoint()
+                
+        # 训练结束
+        self._save_checkpoint(is_final=True)
+        if self.rank == 0:
+            logger.info("Training Completed.")
+
+    def _save_checkpoint(self, is_final: bool = False):
+        """保存检查点"""
+        if not os.path.exists(self.args.output_dir):
+            os.makedirs(self.args.output_dir, exist_ok=True)
+            
+        tag = "final_model" if is_final else f"step_{self.global_step}"
+        
+        try:
+            # PipelineModule 的 save_checkpoint 会自动处理各个 Stage 的参数保存
+            # 它会保存成 layer_xx-model_xx.pt 的分片文件
+            self.model_engine.save_checkpoint(self.args.output_dir, tag=tag)
+            
+            if self.rank == 0:
+                logger.info(f"Checkpoint saved at {os.path.join(self.args.output_dir, tag)}")
+        except Exception as e:
+            logger.warning(f"Rank {self.rank}: Failed to save checkpoint: {e}")

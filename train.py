@@ -1,7 +1,3 @@
-"""
-Unified 3D Parallel Training Framework
-支持多种训练策略: DDP, DeepSpeed, Pipeline Parallel, Tensor Parallel
-"""
 import os
 import argparse
 import json
@@ -17,13 +13,13 @@ import numpy as np
 from typing import Optional, Dict, Any
 import deepspeed
 
-from src.models.megatron_model import MegatronLLM
 from src.dataset import SimpleTextDataset
+
+from src.models.megatron_model import MegatronLLM
+from src.models.megatron_model import get_megatron_pipeline_model
+
 from src.trainers.comm import *
 
-# ============================================================================
-# 工具函数
-# ============================================================================
 
 def setup_distributed():
     """初始化分布式环境"""
@@ -76,60 +72,6 @@ def create_parallel_groups(world_size, tp_size, pp_size):
                     dp_group = group
     
     return tp_group, pp_group, dp_group, tp_rank, pp_rank, dp_rank
-
-
-def create_model(args):
-    """创建模型"""
-    return MegatronLLM(
-        vocab_size=args.vocab_size,
-        hidden_size=args.hidden_size,
-        num_layers=args.num_layers,
-        num_attention_heads=args.num_heads,
-        max_seq_len=args.max_seq_len,
-        ffn_hidden_size=args.ffn_hidden_size or 4 * args.hidden_size,
-        attention_dropout=args.attention_dropout,
-        hidden_dropout=args.hidden_dropout
-    )
-
-def create_model_with_pp(args, pp_rank, tp_group):
-    """创建带PP切分的模型（传递TP group）"""
-    model = MegatronLLM(
-        vocab_size=args.vocab_size,
-        hidden_size=args.hidden_size,
-        num_layers=args.num_layers,
-        num_attention_heads=args.num_heads,
-        max_seq_len=args.max_seq_len,
-        ffn_hidden_size=args.ffn_hidden_size,
-        attention_dropout=args.attention_dropout,
-        hidden_dropout=args.hidden_dropout,
-        tp_group=tp_group  # ✅ 传递TP group给模型
-    )
-    
-    if args.pp_size > 1:
-        # 计算每个stage的layers
-        layers_per_stage = args.num_layers // args.pp_size
-        start_layer = pp_rank * layers_per_stage
-        end_layer = (pp_rank + 1) * layers_per_stage if pp_rank < args.pp_size - 1 else args.num_layers
-        
-        logger.info(f"PP rank {pp_rank}: layers {start_layer}~{end_layer}")
-        
-        # 只保留当前stage的layers
-        model.layers = nn.ModuleList(list(model.layers)[start_layer:end_layer])
-        
-        # 第一阶段保留embedding，其他阶段删除
-        if pp_rank != 0:
-            del model.token_embedding
-            del model.position_embedding
-            del model.embedding_dropout
-        
-        # 最后阶段保留输出层，其他阶段删除
-        if pp_rank != args.pp_size - 1:
-            if hasattr(model, 'final_layernorm'):
-                del model.final_layernorm
-            if hasattr(model, 'lm_head'):
-                del model.lm_head
-    
-    return model
 
 def create_3d_process_groups(rank, world_size, tp_size, pp_size):
     """
@@ -229,9 +171,60 @@ def init_distributed_and_groups(rank, world_size, tp_size, pp_size):
     
     return tp_group, pp_group, dp_group, tp_rank, pp_rank, dp_rank
 
-# ============================================================================
-# 主函数
-# ============================================================================
+
+
+def create_model(args):
+    """创建模型"""
+    return MegatronLLM(
+        vocab_size=args.vocab_size,
+        hidden_size=args.hidden_size,
+        num_layers=args.num_layers,
+        num_attention_heads=args.num_heads,
+        max_seq_len=args.max_seq_len,
+        ffn_hidden_size=args.ffn_hidden_size or 4 * args.hidden_size,
+        attention_dropout=args.attention_dropout,
+        hidden_dropout=args.hidden_dropout
+    )
+
+def create_model_with_pp(args, pp_rank, tp_group):
+    """创建带PP切分的模型（传递TP group）"""
+    model = MegatronLLM(
+        vocab_size=args.vocab_size,
+        hidden_size=args.hidden_size,
+        num_layers=args.num_layers,
+        num_attention_heads=args.num_heads,
+        max_seq_len=args.max_seq_len,
+        ffn_hidden_size=args.ffn_hidden_size,
+        attention_dropout=args.attention_dropout,
+        hidden_dropout=args.hidden_dropout,
+        tp_group=tp_group  # ✅ 传递TP group给模型
+    )
+    
+    if args.pp_size > 1:
+        # 计算每个stage的layers
+        layers_per_stage = args.num_layers // args.pp_size
+        start_layer = pp_rank * layers_per_stage
+        end_layer = (pp_rank + 1) * layers_per_stage if pp_rank < args.pp_size - 1 else args.num_layers
+        
+        logger.info(f"PP rank {pp_rank}: layers {start_layer}~{end_layer}")
+        
+        # 只保留当前stage的layers
+        model.layers = nn.ModuleList(list(model.layers)[start_layer:end_layer])
+        
+        # 第一阶段保留embedding，其他阶段删除
+        if pp_rank != 0:
+            del model.token_embedding
+            del model.position_embedding
+            del model.embedding_dropout
+        
+        # 最后阶段保留输出层，其他阶段删除
+        if pp_rank != args.pp_size - 1:
+            if hasattr(model, 'final_layernorm'):
+                del model.final_layernorm
+            if hasattr(model, 'lm_head'):
+                del model.lm_head
+    
+    return model
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -311,7 +304,7 @@ def main():
     )
     
     # 选择Trainer
-    if args.trainer == "simple":
+    if args.trainer == "simple_trainner":
         train_sampler = DistributedSampler(
             train_dataset, num_replicas=world_size, rank=rank, shuffle=True
         )
@@ -338,21 +331,7 @@ def main():
             tp_group, pp_group, dp_group,
             tp_rank, pp_rank, dp_rank
             )
-        
-    elif args.trainer == "deepspeed_3dtrainer":
-        tp_group, pp_group, dp_group, tp_rank, pp_rank, dp_rank = init_distributed_and_groups(
-        rank, world_size, args.tp_size, args.pp_size
-        )
-        train_loader = DataLoader(
-            train_dataset, batch_size=args.batch_size, num_workers=2, pin_memory=True
-        )
 
-        trainer = DeepSpeed_Trainer3D(
-            model, args, local_rank, rank, world_size,
-            tp_group, pp_group, dp_group,
-            tp_rank, pp_rank, dp_rank
-            )
-        
     elif args.trainer == "megatron_trainer":  
         train_sampler = DistributedSampler(
             train_dataset, num_replicas=world_size, rank=rank, shuffle=True
@@ -373,6 +352,31 @@ def main():
             train_dataset, batch_size=args.batch_size, num_workers=2, pin_memory=True
         )
         trainer = DeepSpeedTrainer(model, args, local_rank, rank, world_size)
+        
+        
+    elif args.trainer == "deepspeed_pipeline_3dtrainer":
+        tp_group, pp_group, dp_group, tp_rank, pp_rank, dp_rank = init_distributed_and_groups(
+        rank, world_size, args.tp_size, args.pp_size
+        )
+        train_loader = DataLoader(
+            train_dataset, batch_size=args.batch_size, num_workers=2, pin_memory=True
+        )
+    
+        local_rank = int(os.environ['LOCAL_RANK'])
+        rank = dist.get_rank()
+        world_size = dist.get_world_size()
+        
+        deepspeed.init_distributed(dist_backend='nccl')
+        
+        
+        model = get_megatron_pipeline_model(args, tp_group, num_stages=args.pp_size)
+        trainer = DeepSpeedPipelineTrainer3D(
+            model=model,
+            args=args,
+            local_rank=local_rank,
+            rank=rank,
+            world_size=world_size,
+        )
     
     else:
         raise ValueError(f"Unknown trainer: {args.trainer}")

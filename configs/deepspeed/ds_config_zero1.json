@@ -1,6 +1,7 @@
 {
   "train_micro_batch_size_per_gpu": 2,
   "gradient_accumulation_steps": 1,
+
   "steps_per_print": 10,
   "wall_clock_breakdown": false,
   "seed": 42,
@@ -35,5 +36,12 @@
     "initial_scale_power": 16
   },
   "gradient_clipping": 1.0,
-  "communication_data_type": "fp32"
+  "communication_data_type": "fp32",
+  "pipeline": {
+      "schedule": "gpipe",
+      "num_stages": 2,
+      "num_microbatches": 1,
+      "activation_checkpoint": false,
+      "checkpoint_activations": false
+    }
 }

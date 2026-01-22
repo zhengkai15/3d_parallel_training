@@ -27,6 +27,7 @@ MASTER_PORT=${MASTER_PORT:-29500}              # 通信端口
 
 # 2. 模型配置
 TP_SIZE=${TP_SIZE:-2}
+PP_SIZE=${PP_SIZE:-2}
 VOCAB_SIZE=${VOCAB_SIZE:-5000}
 HIDDEN_SIZE=${HIDDEN_SIZE:-768}
 NUM_LAYERS=${NUM_LAYERS:-12}
@@ -89,10 +90,13 @@ CMD="$PY \
     --learning_rate $LEARNING_RATE \
     --warmup_steps $WARMUP_STEPS \
     --tp_size $TP_SIZE \
+    --pp_size $PP_SIZE \
     --fp16 \
     --logging_steps 10 \
     --save_steps 500 \
-    --output_dir $OUTPUT_DIR"
+    --output_dir $OUTPUT_DIR" \
+    --trainer simple_trainner
+
 
 # 打印完整命令以便调试
 echo "Executing command:"

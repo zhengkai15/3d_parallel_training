@@ -3,7 +3,7 @@
 # 3D并行训练启动脚本 - DeepSpeed版本
 # 使用方法: bash scripts/run_deepspeed.sh
 
-set -e
+set -x
 
 # 获取脚本所在目录
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -18,8 +18,9 @@ cd "$PROJECT_ROOT"
 NUM_GPUS=${NUM_GPUS:-4}
 
 # 并行配置
-TP_SIZE=${TP_SIZE:-2}
-ZERO_STAGE=${ZERO_STAGE:-2}  # ZeRO优化阶段 (0, 1, 2, 3)
+TP_SIZE=${TP_SIZE:-1}
+PP_SIZE=${PP_SIZE:-2}
+ZERO_STAGE=${ZERO_STAGE:-1}  # ZeRO优化阶段 (0, 1, 2, 3)
 
 # 模型配置
 VOCAB_SIZE=${VOCAB_SIZE:-5000}
@@ -31,7 +32,7 @@ MAX_SEQ_LEN=${MAX_SEQ_LEN:-128}
 # 训练配置
 BATCH_SIZE=${BATCH_SIZE:-8}
 GRAD_ACCUM_STEPS=${GRAD_ACCUM_STEPS:-4}
-MAX_STEPS=${MAX_STEPS:-1000}
+MAX_STEPS=${MAX_STEPS:-10000}
 LEARNING_RATE=${LEARNING_RATE:-5e-5}
 WARMUP_STEPS=${WARMUP_STEPS:-100}
 
@@ -93,6 +94,7 @@ DP=/cpfs01/projects-SSD/cfff-4a8d9af84f66_SSD/public/zhengkai/miniconda3/envs/3d
 #     --learning_rate $LEARNING_RATE \
 #     --warmup_steps $WARMUP_STEPS \
 #     --tp_size $TP_SIZE \
+    # --pp_size $PP_SIZE \
 #     --zero_stage $ZERO_STAGE \
 #     --fp16 \
 #     --logging_steps 10 \
@@ -102,9 +104,36 @@ DP=/cpfs01/projects-SSD/cfff-4a8d9af84f66_SSD/public/zhengkai/miniconda3/envs/3d
 
 TR=/cpfs01/projects-SSD/cfff-4a8d9af84f66_SSD/public/zhengkai/miniconda3/envs/3dparallel/bin/torchrun
 # TODO: deepspeed_3dtrainer 实现zero优化器分片+3d并行
+# $TR --master_addr=dlc1443fgp02dkod-master-0 \
+#     --master_port=56747 \
+#     --nnodes 1 \
+#     --nproc_per_node 4 \
+#     --node_rank $1 \
+#     train.py \
+#     --deepspeed_config $DS_CONFIG \
+#     --vocab_size $VOCAB_SIZE \
+#     --hidden_size $HIDDEN_SIZE \
+#     --num_layers $NUM_LAYERS \
+#     --num_heads $NUM_HEADS \
+#     --max_seq_len $MAX_SEQ_LEN \
+#     --batch_size $BATCH_SIZE \
+#     --gradient_accumulation_steps $GRAD_ACCUM_STEPS \
+#     --max_steps $MAX_STEPS \
+#     --learning_rate $LEARNING_RATE \
+#     --warmup_steps $WARMUP_STEPS \
+#     --tp_size $TP_SIZE \
+    # --pp_size $PP_SIZE \
+#     --zero_stage $ZERO_STAGE \
+#     --fp16 \
+#     --logging_steps 10 \
+#     --save_steps 500 \
+#     --output_dir $OUTPUT_DIR \
+#     --trainer deepspeed_trainner # deepspeed_3dtrainer  deepspeed_trainner
+
+
 $TR --master_addr=dlc1443fgp02dkod-master-0 \
     --master_port=56747 \
-    --nnodes 1 \
+    --nnodes 2 \
     --nproc_per_node 4 \
     --node_rank $1 \
     train.py \
@@ -120,12 +149,13 @@ $TR --master_addr=dlc1443fgp02dkod-master-0 \
     --learning_rate $LEARNING_RATE \
     --warmup_steps $WARMUP_STEPS \
     --tp_size $TP_SIZE \
+    --pp_size $PP_SIZE \
     --zero_stage $ZERO_STAGE \
     --fp16 \
     --logging_steps 10 \
     --save_steps 500 \
     --output_dir $OUTPUT_DIR \
-    --trainer deepspeed_trainner # deepspeed_3dtrainer  deepspeed_trainner
+    --trainer deepspeed_pipeline_3dtrainer #deepspeed_trainner
 
 echo ""
 echo "================================"

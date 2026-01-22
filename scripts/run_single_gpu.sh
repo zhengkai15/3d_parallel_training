@@ -15,6 +15,8 @@ cd "$PROJECT_ROOT"
 # ==================== 配置参数 ====================
 
 # 小模型配置 (快速测试)
+TP_SIZE=${TP_SIZE:-2}
+PP_SIZE=${PP_SIZE:-2}
 VOCAB_SIZE=${VOCAB_SIZE:-5000}
 HIDDEN_SIZE=${HIDDEN_SIZE:-768}
 NUM_LAYERS=${NUM_LAYERS:-12}
@@ -72,8 +74,10 @@ $PY train.py \
     --logging_steps 5 \
     --save_steps 50 \
     --output_dir $OUTPUT_DIR \
+    --tp_size $TP_SIZE \
+    --pp_size $PP_SIZE \
     --fp16 \
-    --trainer simple
+    --trainer simple_trainner
 
 echo ""
 echo "================================"

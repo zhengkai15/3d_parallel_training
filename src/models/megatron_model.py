@@ -7,9 +7,7 @@ import torch.nn.functional as F
 import torch.distributed as dist
 from typing import Optional
 import math
-
-
-
+from deepspeed.pipe import PipelineModule, LayerSpec
 
 class SimpleTransformer(nn.Module):
     """简化的 Transformer 模型，用于单卡测试"""
@@ -567,3 +565,186 @@ class MegatronLLM(nn.Module):
     def get_num_params(self):
         """获取参数量"""
         return sum(p.numel() for p in self.parameters())
+
+
+class EmbeddingPipe(nn.Module):
+    """
+    Pipeline的第一层：输入 (input_ids, attention_mask)，输出 (hidden_states, attention_mask)
+    """
+    def __init__(
+        self,
+        vocab_size,
+        hidden_size,
+        max_seq_len,
+        hidden_dropout=0.1,
+    ):
+        super().__init__()
+        self.token_embedding = nn.Embedding(vocab_size, hidden_size)
+        self.position_embedding = nn.Embedding(max_seq_len, hidden_size)
+        self.embedding_dropout = nn.Dropout(hidden_dropout)
+
+    def forward(self, args):
+        # DeepSpeed Pipeline传入的 args 通常是一个 tuple
+        # 在第一层， args 来自 DataLoader，格式由你的 Dataset 决定
+        # 假设格式为 (input_ids, attention_mask)
+        input_ids, attention_mask = args
+        
+        batch_size, seq_len = input_ids.shape
+        device = input_ids.device
+
+        token_embeds = self.token_embedding(input_ids)
+        position_ids = torch.arange(seq_len, dtype=torch.long, device=device)
+        position_ids = position_ids.unsqueeze(0).expand(batch_size, -1)
+        
+        position_embeds = self.position_embedding(position_ids)
+        hidden_states = token_embeds + position_embeds
+        hidden_states = self.embedding_dropout(hidden_states)
+
+        # 处理 Mask (转换格式)
+        if attention_mask is not None:
+            # 扩展 mask 维度以适应 Transformer: (batch, 1, 1, seq_len)
+            if attention_mask.dim() == 2:
+                extended_attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
+                # 使用 fp16/bf16 兼容的大负数
+                extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
+            else:
+                extended_attention_mask = attention_mask
+        else:
+            extended_attention_mask = None
+            
+        extended_attention_mask = extended_attention_mask.clone().detach()
+        extended_attention_mask.requires_grad_(True) 
+
+        # 必须返回 tuple 以便传给下一层
+        return hidden_states, extended_attention_mask
+
+
+class TransformerLayerPipe(nn.Module):
+    """
+    中间层包装器：接收 (hidden, mask)，计算后返回 (hidden, mask)
+    """
+    def __init__(
+        self,
+        hidden_size,
+        num_attention_heads,
+        ffn_hidden_size,
+        attention_dropout,
+        hidden_dropout,
+        layernorm_epsilon=1e-5,
+        tp_group=None
+    ):
+        super().__init__()
+        # 复用你原有的 ParallelTransformerLayer
+        self.layer = ParallelTransformerLayer(
+            hidden_size=hidden_size,
+            num_attention_heads=num_attention_heads,
+            ffn_hidden_size=ffn_hidden_size,
+            attention_dropout=attention_dropout,
+            hidden_dropout=hidden_dropout,
+            layernorm_epsilon=layernorm_epsilon,
+            tp_group=tp_group
+        )
+
+    def forward(self, args):
+        hidden_states, attention_mask = args
+        # 调用原来的层
+        output = self.layer(hidden_states, attention_mask)
+        # 必须把 mask 继续往下传，因为后面的层也需要
+        return output, attention_mask
+
+
+class FinalLayerPipe(nn.Module):
+    """
+    Pipeline的最后一层：接收 (hidden, mask)，输出 logits
+    """
+    def __init__(self, hidden_size, vocab_size, layernorm_epsilon=1e-5):
+        super().__init__()
+        self.final_layernorm = nn.LayerNorm(hidden_size, eps=layernorm_epsilon)
+        self.lm_head = nn.Linear(hidden_size, vocab_size, bias=False)
+
+    def forward(self, args):
+        hidden_states, _ = args # 最后一层不需要 mask 了
+        
+        hidden_states = self.final_layernorm(hidden_states)
+        logits = self.lm_head(hidden_states)
+        
+        # Pipeline 的最后一层通常只返回模型的输出 (logits)
+        # Loss 计算由 deepspeed 在外部通过 loss_fn 处理
+        return logits
+    
+    
+def get_megatron_pipeline_model(model_args, tp_group=None, num_stages=1):
+    """
+    构建 DeepSpeed PipelineModule
+    """
+    
+    # 1. 定义 Embedding Spec
+    specs = [
+        LayerSpec(
+            EmbeddingPipe,
+            vocab_size=model_args.vocab_size,
+            hidden_size=model_args.hidden_size,
+            max_seq_len=model_args.max_seq_len,
+            hidden_dropout=model_args.hidden_dropout
+        )
+    ]
+    
+    # 2. 定义 Transformer Layers Specs
+    if model_args.ffn_hidden_size is None:
+        model_args.ffn_hidden_size = 4 * model_args.hidden_size
+
+    for _ in range(model_args.num_layers):
+        specs.append(
+            LayerSpec(
+                TransformerLayerPipe,
+                hidden_size=model_args.hidden_size,
+                num_attention_heads=model_args.num_heads,
+                ffn_hidden_size=model_args.ffn_hidden_size,
+                attention_dropout=model_args.attention_dropout,
+                hidden_dropout=model_args.hidden_dropout,
+                tp_group=tp_group
+            )
+        )
+        
+    # 3. 定义 Final Layer Spec
+    specs.append(
+        LayerSpec(
+            FinalLayerPipe,
+            hidden_size=model_args.hidden_size,
+            vocab_size=model_args.vocab_size,
+        )
+    )
+    
+    # 4. 实例化 PipelineModule
+    # DeepSpeed 会自动根据 num_stages 将 specs 列表切分到不同 GPU
+    
+    def causal_lm_loss_fn(outputs, labels):
+        """
+        outputs: 模型最后一层的输出 (logits)
+        labels: 数据集中的标签
+        """
+        logits = outputs
+        vocab_size = logits.size(-1)
+        
+        # Shift logits and labels for causal LM task
+        shift_logits = logits[..., :-1, :].contiguous()
+        shift_labels = labels[..., 1:].contiguous()
+        
+        loss_fct = nn.CrossEntropyLoss()
+        loss = loss_fct(
+            shift_logits.view(-1, vocab_size),
+            shift_labels.view(-1)
+        )
+        return loss
+
+
+
+    model = PipelineModule(
+        layers=specs,
+        loss_fn=causal_lm_loss_fn,
+        num_stages=num_stages, # 对应 JSON 中的 pipeline.num_stages
+        partition_method='type:TransformerLayerPipe', # 按照 Transformer 层进行负载均衡切分
+        activation_checkpoint_interval=0 # 默认为0，如果显存不够可设为1
+    )
+    
+    return model
